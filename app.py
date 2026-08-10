@@ -104,6 +104,27 @@ def export_formatted_excel(dataframe, filename="Extracted_Candidates.xlsx"):
     wb.save(filename)
     return filename
 
+# ==================== HYBRID FALLBACK PARSER FOR EDUCATION ====================
+def extract_education_fallback(text):
+    """Fallback Python extractor if AI fails to catch JSC/SSC/HSC/Degrees."""
+    patterns = [
+        r'(JSC|SSC|HSC|Dakhil|Alim|Fazil|Kamil|BSc|BA|BCom|Diploma|Master|MBBS)[^\n|]*[|\n][^\n|]*[|\n]?([^\n]+)',
+        r'Academic Qualification[s]?:?\s*([^\n]+\n[^\n]+)'
+    ]
+    matches = []
+    for p in patterns:
+        found = re.findall(p, text, re.IGNORECASE)
+        for m in found:
+            if isinstance(m, tuple):
+                cleaned = " ".join([x.strip() for x in m if x.strip()])
+            else:
+                cleaned = m.strip()
+            if len(cleaned) > 5 and cleaned not in matches:
+                matches.append(cleaned)
+    if matches:
+        return " | ".join(matches[:2])
+    return "None Listed"
+
 # ==================== NAVIGATION TABS ====================
 tab_main, tab_api, tab_history = st.tabs(["🚀 CV Extractor", "⚙️ Persistent API Settings", "📜 Local Session History"])
 
@@ -238,28 +259,36 @@ def clean_and_parse_json(text):
     return None
 
 def run_ai_extraction(text):
-    prompt_system = """You are an expert HR Data Parser. Extract CV details strictly into a valid JSON object.
-STRICT EXTRACTION RULES:
-- Current Organization: Current active job employer or most recent employer.
-- Previous Organizations: List all past companies/institutions separated by pipes (e.g., "Concern Universel | Dhaka Ahsania Mission"). If NO previous company is listed, write "None Listed".
-- Education: Capture ALL academic degrees/qualifications including JSC, SSC, HSC, MBBS, Trade Certifications, Madrasah degrees, or School names. (e.g., "JSC from Char Kanto Nogor Dimoki High School"). Do NOT return "Not Found" if ANY school, madrasah, or exam is present.
-- Experience Summary: Total years or brief breakdown.
-- Keys required: Name, Email, Phone, Designation, Current Organization, Previous Organizations, Experience Summary, Education."""
+    # Compress text by removing heavy duty paragraphs to stay within free token limits
+    lines = [line for line in text.split('\n') if not line.strip().startswith('•')]
+    compressed_text = "\n".join(lines)[:4000]
 
-    user_prompt = f"CV TEXT:\n{text[:6000]}"
+    prompt_system = """You are an HR JSON Parser. Extract CV fields into strict JSON format.
+Fields:
+- Name
+- Email (Return "" if empty)
+- Phone
+- Designation
+- Current Organization
+- Previous Organizations (List all past companies separated by '|'. Return "None Listed" if none)
+- Experience Summary (Total years e.g., "4.4 years")
+- Education (Search for ALL schooling, JSC, SSC, HSC, Degree, Madrasah, or Institutes. e.g. "JSC from Machumiya Islamia Sunni Aleem Madrasah").
+Return ONLY valid JSON."""
+
+    user_prompt = f"CV CONTENT:\n{compressed_text}"
 
     providers = []
     if st.session_state.get("openrouter_key"):
-        providers.append(("OpenRouter", "https://openrouter.ai/api/v1", st.session_state["openrouter_key"], "openrouter/free"))
+        # Fallback list of multiple free models on OpenRouter
+        for m in ["openrouter/free", "meta-llama/llama-3.1-8b-instruct:free", "google/gemma-2-9b-it:free"]:
+            providers.append(("OpenRouter", "https://openrouter.ai/api/v1", st.session_state["openrouter_key"], m))
     if st.session_state.get("groq_key"):
         providers.append(("Groq", "https://api.groq.com/openai/v1", st.session_state["groq_key"], "llama-3.3-70b-versatile"))
     if st.session_state.get("gemini_key"):
         providers.append(("Gemini", "https://generativelanguage.googleapis.com/v1beta/openai/", st.session_state["gemini_key"], "gemini-2.0-flash"))
-    if st.session_state.get("mistral_key"):
-        providers.append(("Mistral", "https://api.mistral.ai/v1", st.session_state["mistral_key"], "mistral-tiny"))
 
     if not providers:
-        return None, "No API keys configured. Please add an API key in the 'Persistent API Settings' tab."
+        return None, "No API keys configured."
 
     for provider_name, base_url, key, model in providers:
         try:
@@ -275,6 +304,9 @@ STRICT EXTRACTION RULES:
             raw = res.choices[0].message.content
             parsed = clean_and_parse_json(raw)
             if parsed:
+                # Apply regex fallback if education came back empty
+                if not parsed.get("Education") or parsed.get("Education") in ["None Listed", "Not Found", ""]:
+                    parsed["Education"] = extract_education_fallback(text)
                 parsed["Source"] = f"{provider_name} ({model})"
                 return parsed, None
         except Exception:
@@ -323,7 +355,7 @@ with tab_main:
             tsv_data = df.to_csv(sep="\t", index=False)
             st.subheader("📋 Copy Results directly")
             st.code(tsv_data, language="text")
-            st.caption("Tip: Click the copy icon in the top right of the text box above to copy data directly into Excel or Google Sheets!")
+            st.caption("Tip: Click the copy icon in the top right of the code box above to paste directly into Excel or Google Sheets!")
 
             excel_file = export_formatted_excel(df)
             with open(excel_file, "rb") as f:
