@@ -5,6 +5,7 @@ import pandas as pd
 import json
 import re
 import os
+import time
 import openpyxl
 from openpyxl.styles import Alignment, Font, PatternFill
 from openai import OpenAI
@@ -59,7 +60,7 @@ def load_history():
 def save_history(new_results):
     history = load_history()
     updated = new_results + history
-    updated = updated[:10]
+    updated = updated[:20]
     with open(HISTORY_FILE, "w") as f:
         json.dump(updated, f, indent=2)
 
@@ -83,7 +84,7 @@ def export_formatted_excel(dataframe, filename="Extracted_Candidates.xlsx"):
         'File Name': 20,
         'Name': 22,
         'Email': 25,
-        'Phone': 18,
+        'Phone': 20,
         'Designation': 25,
         'Current Organization': 25,
         'Previous Organizations': 35,
@@ -104,26 +105,36 @@ def export_formatted_excel(dataframe, filename="Extracted_Candidates.xlsx"):
     wb.save(filename)
     return filename
 
-# ==================== HYBRID FALLBACK PARSER FOR EDUCATION ====================
-def extract_education_fallback(text):
-    """Fallback Python extractor if AI fails to catch JSC/SSC/HSC/Degrees."""
-    patterns = [
-        r'(JSC|SSC|HSC|Dakhil|Alim|Fazil|Kamil|BSc|BA|BCom|Diploma|Master|MBBS)[^\n|]*[|\n][^\n|]*[|\n]?([^\n]+)',
-        r'Academic Qualification[s]?:?\s*([^\n]+\n[^\n]+)'
-    ]
-    matches = []
-    for p in patterns:
-        found = re.findall(p, text, re.IGNORECASE)
-        for m in found:
-            if isinstance(m, tuple):
-                cleaned = " ".join([x.strip() for x in m if x.strip()])
-            else:
-                cleaned = m.strip()
-            if len(cleaned) > 5 and cleaned not in matches:
-                matches.append(cleaned)
-    if matches:
-        return " | ".join(matches[:2])
-    return "None Listed"
+# ==================== DETERMINISTIC (REGEX) PARSERS ====================
+def extract_email(text):
+    match = re.search(r'[a-zA-Z0-9%+\_.-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', text)
+    return match.group(0).strip() if match else "N/A"
+
+def extract_phone(text):
+    phones = re.findall(r'(?:\+?88)?01[3-9]\d{8}', text)
+    if phones:
+        return ", ".join(list(dict.fromkeys(phones)))
+    return "N/A"
+
+def extract_education_hardcode(text):
+    """Parses education keywords directly from text/tables."""
+    edu_matches = []
+    
+    # Check Bdjobs qualification block or general degree titles
+    keywords = ["JSC", "SSC", "HSC", "Dakhil", "Alim", "Fazil", "Kamil", "BSc", "BA", "BCom", "MBBS", "Diploma", "Masters"]
+    
+    lines = text.split('\n')
+    for i, line in enumerate(lines):
+        for kw in keywords:
+            if re.search(r'\b' + kw + r'\b', line, re.IGNORECASE):
+                # Pick up surrounding text context
+                segment = line.strip()
+                if len(segment) < 100 and segment not in edu_matches:
+                    edu_matches.append(segment)
+                    
+    if edu_matches:
+        return " | ".join(edu_matches[:3])
+    return "Not Found"
 
 # ==================== NAVIGATION TABS ====================
 tab_main, tab_api, tab_history = st.tabs(["🚀 CV Extractor", "⚙️ Persistent API Settings", "📜 Local Session History"])
@@ -204,7 +215,7 @@ with tab_api:
             for status in results_status:
                 st.write(status)
 
-# ==================== PDF & AI EXTRACTION ENGINE ====================
+# ==================== PDF EXTRACTION ENGINE ====================
 
 def extract_text_from_pdf(file):
     text = ""
@@ -259,36 +270,36 @@ def clean_and_parse_json(text):
     return None
 
 def run_ai_extraction(text):
-    # Compress text by removing heavy duty paragraphs to stay within free token limits
+    # Sanitize and strip heavy bullet points
     lines = [line for line in text.split('\n') if not line.strip().startswith('•')]
-    compressed_text = "\n".join(lines)[:4000]
+    compressed_text = "\n".join(lines)[:3500]
 
-    prompt_system = """You are an HR JSON Parser. Extract CV fields into strict JSON format.
-Fields:
+    prompt_system = """Extract candidate info from CV text into valid JSON.
+JSON Keys Required:
 - Name
-- Email (Return "" if empty)
-- Phone
 - Designation
 - Current Organization
-- Previous Organizations (List all past companies separated by '|'. Return "None Listed" if none)
-- Experience Summary (Total years e.g., "4.4 years")
-- Education (Search for ALL schooling, JSC, SSC, HSC, Degree, Madrasah, or Institutes. e.g. "JSC from Machumiya Islamia Sunni Aleem Madrasah").
-Return ONLY valid JSON."""
+- Previous Organizations (List all prior employers separated by '|'. Return "None Listed" if none exist)
+- Experience Summary (Total years e.g., "25.7 yrs")
+- Education (Degrees, Exams, and Institutes e.g. "SSC from Sarail Annada Govt. High School")
 
-    user_prompt = f"CV CONTENT:\n{compressed_text}"
+Return JSON ONLY."""
+
+    user_prompt = f"CV TEXT:\n{compressed_text}"
 
     providers = []
     if st.session_state.get("openrouter_key"):
-        # Fallback list of multiple free models on OpenRouter
-        for m in ["openrouter/free", "meta-llama/llama-3.1-8b-instruct:free", "google/gemma-2-9b-it:free"]:
-            providers.append(("OpenRouter", "https://openrouter.ai/api/v1", st.session_state["openrouter_key"], m))
+        providers.extend([
+            ("OpenRouter", "https://openrouter.ai/api/v1", st.session_state["openrouter_key"], "openrouter/free"),
+            ("OpenRouter", "https://openrouter.ai/api/v1", st.session_state["openrouter_key"], "meta-llama/llama-3.1-8b-instruct:free")
+        ])
     if st.session_state.get("groq_key"):
         providers.append(("Groq", "https://api.groq.com/openai/v1", st.session_state["groq_key"], "llama-3.3-70b-versatile"))
     if st.session_state.get("gemini_key"):
         providers.append(("Gemini", "https://generativelanguage.googleapis.com/v1beta/openai/", st.session_state["gemini_key"], "gemini-2.0-flash"))
 
     if not providers:
-        return None, "No API keys configured."
+        return None, "No API key configured."
 
     for provider_name, base_url, key, model in providers:
         try:
@@ -299,20 +310,18 @@ Return ONLY valid JSON."""
                     {"role": "system", "content": prompt_system},
                     {"role": "user", "content": user_prompt}
                 ],
-                temperature=0.1
+                temperature=0.0
             )
             raw = res.choices[0].message.content
             parsed = clean_and_parse_json(raw)
             if parsed:
-                # Apply regex fallback if education came back empty
-                if not parsed.get("Education") or parsed.get("Education") in ["None Listed", "Not Found", ""]:
-                    parsed["Education"] = extract_education_fallback(text)
                 parsed["Source"] = f"{provider_name} ({model})"
                 return parsed, None
         except Exception:
+            time.sleep(1) # Brief retry pause for rate limits
             continue
 
-    return None, "All configured API providers failed."
+    return None, "All API providers timed out or hit rate limits."
 
 # ==================== TAB 1: MAIN EXTRACTOR ====================
 with tab_main:
@@ -324,20 +333,47 @@ with tab_main:
         progress = st.progress(0)
         
         for i, file in enumerate(uploaded_files):
-            raw_text, extractor_type = extract_text_from_pdf(file)
+            raw_text, _ = extract_text_from_pdf(file)
             
             if not raw_text.strip():
                 st.error(f"Could not read {file.name}")
                 continue
             
+            # 1. Deterministic Python Extractions (100% Reliable)
+            email_val = extract_email(raw_text)
+            phone_val = extract_phone(raw_text)
+            fallback_edu = extract_education_hardcode(raw_text)
+
+            # 2. AI Structured Extraction
             data, err = run_ai_extraction(raw_text)
             
             if data:
+                # Override AI fields with regex verified data
                 data["File Name"] = file.name
+                data["Email"] = email_val
+                data["Phone"] = phone_val if data.get("Phone") in ["N/A", "", None] else data.get("Phone")
+                
+                # Check education safety
+                if not data.get("Education") or data.get("Education") in ["Not Found", "None Listed", ""]:
+                    data["Education"] = fallback_edu
+
                 results.append(data)
                 st.success(f"Successfully processed {file.name}")
             else:
-                st.error(f"Extraction failed for {file.name}: {err}")
+                # If AI fails completely, fallback to regex-only entry
+                st.warning(f"AI failed for {file.name}, using Regex Fallback.")
+                results.append({
+                    "File Name": file.name,
+                    "Name": file.name.replace(".pdf", ""),
+                    "Email": email_val,
+                    "Phone": phone_val,
+                    "Designation": "N/A",
+                    "Current Organization": "N/A",
+                    "Previous Organizations": "N/A",
+                    "Experience Summary": "N/A",
+                    "Education": fallback_edu,
+                    "Source": "Python Regex Fallback"
+                })
             
             progress.progress((i + 1) / len(uploaded_files))
 
@@ -351,11 +387,9 @@ with tab_main:
             
             st.dataframe(df, use_container_width=True)
             
-            # --- COPY TO CLIPBOARD CODE ---
             tsv_data = df.to_csv(sep="\t", index=False)
             st.subheader("📋 Copy Results directly")
             st.code(tsv_data, language="text")
-            st.caption("Tip: Click the copy icon in the top right of the code box above to paste directly into Excel or Google Sheets!")
 
             excel_file = export_formatted_excel(df)
             with open(excel_file, "rb") as f:
@@ -368,7 +402,7 @@ with tab_main:
 
 # ==================== TAB 3: LOCAL HISTORY ====================
 with tab_history:
-    st.header("📜 Session History (Last 10 Extractions)")
+    st.header("📜 Session History (Last 20 Extractions)")
     history_data = load_history()
     
     if history_data:
