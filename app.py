@@ -21,7 +21,6 @@ KEYS_FILE = "saved_api_keys.json"
 
 # ==================== PERSISTENT KEYS MANAGEMENT ====================
 def load_saved_keys():
-    """Load keys from local file if available."""
     if os.path.exists(KEYS_FILE):
         try:
             with open(KEYS_FILE, "r") as f:
@@ -31,23 +30,19 @@ def load_saved_keys():
     return {}
 
 def save_keys_to_file(keys_dict):
-    """Save keys locally so they survive refreshes."""
     try:
         with open(KEYS_FILE, "w") as f:
             json.dump(keys_dict, f, indent=2)
     except Exception:
         pass
 
-# Initialize Keys from storage or URL query params
 saved_file_keys = load_saved_keys()
 api_providers = ["openrouter", "gemini", "groq", "mistral", "together", "cohere"]
 
 for provider in api_providers:
     session_key = f"{provider}_key"
-    # Check URL params first, then saved file, then empty string
     param_val = st.query_params.get(session_key, "")
     file_val = saved_file_keys.get(session_key, "")
-    
     if session_key not in st.session_state:
         st.session_state[session_key] = param_val or file_val or ""
 
@@ -64,19 +59,17 @@ def load_history():
 def save_history(new_results):
     history = load_history()
     updated = new_results + history
-    updated = updated[:10]  # Keep last 10
+    updated = updated[:10]
     with open(HISTORY_FILE, "w") as f:
         json.dump(updated, f, indent=2)
 
 # ==================== EXCEL FORMATTING FUNCTION ====================
 def export_formatted_excel(dataframe, filename="Extracted_Candidates.xlsx"):
-    """Saves DataFrame with readable column widths and wrapped text formatting."""
     dataframe.to_excel(filename, index=False, engine='openpyxl')
     
     wb = openpyxl.load_workbook(filename)
     ws = wb.active
 
-    # Header Styling
     header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
     header_font = Font(color="FFFFFF", bold=True, size=11)
     
@@ -86,7 +79,6 @@ def export_formatted_excel(dataframe, filename="Extracted_Candidates.xlsx"):
             cell.font = header_font
             cell.alignment = Alignment(horizontal="center", vertical="center")
 
-    # Column Widths
     col_widths = {
         'File Name': 20,
         'Name': 22,
@@ -121,12 +113,9 @@ with tab_api:
     st.caption("Keys entered here are auto-saved locally so you DON'T have to re-enter them on refresh!")
 
     def update_key(provider_name):
-        """Callback to lock key into session_state, URL params, and local storage."""
         val = st.session_state[f"input_{provider_name}"]
         st.session_state[f"{provider_name}_key"] = val
         st.query_params[f"{provider_name}_key"] = val
-        
-        # Save to local file
         current_keys = load_saved_keys()
         current_keys[f"{provider_name}_key"] = val
         save_keys_to_file(current_keys)
@@ -136,78 +125,34 @@ with tab_api:
     with col_a:
         st.subheader("1. OpenRouter")
         st.markdown("[🔗 Get OpenRouter Key](https://openrouter.ai/keys)")
-        st.text_input(
-            "OpenRouter Key", 
-            value=st.session_state["openrouter_key"], 
-            type="password", 
-            key="input_openrouter",
-            on_change=update_key,
-            args=("openrouter",)
-        )
+        st.text_input("OpenRouter Key", value=st.session_state["openrouter_key"], type="password", key="input_openrouter", on_change=update_key, args=("openrouter",))
 
         st.subheader("2. Google Gemini")
         st.markdown("[🔗 Get Gemini Key](https://aistudio.google.com/)")
-        st.text_input(
-            "Gemini Key", 
-            value=st.session_state["gemini_key"], 
-            type="password", 
-            key="input_gemini",
-            on_change=update_key,
-            args=("gemini",)
-        )
+        st.text_input("Gemini Key", value=st.session_state["gemini_key"], type="password", key="input_gemini", on_change=update_key, args=("gemini",))
 
         st.subheader("3. Groq AI")
         st.markdown("[🔗 Get Groq Key](https://console.groq.com/keys)")
-        st.text_input(
-            "Groq Key", 
-            value=st.session_state["groq_key"], 
-            type="password", 
-            key="input_groq",
-            on_change=update_key,
-            args=("groq",)
-        )
+        st.text_input("Groq Key", value=st.session_state["groq_key"], type="password", key="input_groq", on_change=update_key, args=("groq",))
 
     with col_b:
         st.subheader("4. Mistral AI")
         st.markdown("[🔗 Get Mistral Key](https://console.mistral.ai/)")
-        st.text_input(
-            "Mistral Key", 
-            value=st.session_state["mistral_key"], 
-            type="password", 
-            key="input_mistral",
-            on_change=update_key,
-            args=("mistral",)
-        )
+        st.text_input("Mistral Key", value=st.session_state["mistral_key"], type="password", key="input_mistral", on_change=update_key, args=("mistral",))
 
         st.subheader("5. Together AI")
         st.markdown("[🔗 Get Together AI Key](https://api.together.ai/)")
-        st.text_input(
-            "Together AI Key", 
-            value=st.session_state["together_key"], 
-            type="password", 
-            key="input_together",
-            on_change=update_key,
-            args=("together",)
-        )
+        st.text_input("Together AI Key", value=st.session_state["together_key"], type="password", key="input_together", on_change=update_key, args=("together",))
 
         st.subheader("6. Cohere AI")
         st.markdown("[🔗 Get Cohere Key](https://dashboard.cohere.com/api-keys)")
-        st.text_input(
-            "Cohere Key", 
-            value=st.session_state["cohere_key"], 
-            type="password", 
-            key="input_cohere",
-            on_change=update_key,
-            args=("cohere",)
-        )
+        st.text_input("Cohere Key", value=st.session_state["cohere_key"], type="password", key="input_cohere", on_change=update_key, args=("cohere",))
 
     st.markdown("---")
     st.subheader("🧪 Test API Connections")
     
     if st.button("Test Saved API Keys"):
         results_status = []
-        
-        # Test OpenRouter
         if st.session_state["openrouter_key"]:
             try:
                 c = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=st.session_state["openrouter_key"])
@@ -216,7 +161,6 @@ with tab_api:
             except Exception as e:
                 results_status.append(f"❌ OpenRouter Error: {str(e)[:60]}")
 
-        # Test Groq
         if st.session_state["groq_key"]:
             try:
                 c = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=st.session_state["groq_key"])
@@ -225,7 +169,6 @@ with tab_api:
             except Exception as e:
                 results_status.append(f"❌ Groq Error: {str(e)[:60]}")
 
-        # Test Gemini
         if st.session_state["gemini_key"]:
             try:
                 c = OpenAI(base_url="https://generativelanguage.googleapis.com/v1beta/openai/", api_key=st.session_state["gemini_key"])
@@ -233,15 +176,6 @@ with tab_api:
                 results_status.append("✅ Google Gemini: Connected successfully!")
             except Exception as e:
                 results_status.append(f"❌ Gemini Error: {str(e)[:60]}")
-
-        # Test Mistral
-        if st.session_state["mistral_key"]:
-            try:
-                c = OpenAI(base_url="https://api.mistral.ai/v1", api_key=st.session_state["mistral_key"])
-                c.chat.completions.create(model="mistral-tiny", messages=[{"role":"user","content":"hi"}], max_tokens=5)
-                results_status.append("✅ Mistral AI: Connected successfully!")
-            except Exception as e:
-                results_status.append(f"❌ Mistral Error: {str(e)[:60]}")
 
         if not results_status:
             st.warning("Please enter at least one API key above.")
@@ -305,10 +239,10 @@ def clean_and_parse_json(text):
 
 def run_ai_extraction(text):
     prompt_system = """You are an expert HR Data Parser. Extract CV details strictly into a valid JSON object.
-Rules:
+STRICT EXTRACTION RULES:
 - Current Organization: Current active job employer or most recent employer.
-- Previous Organizations: List all past companies/institutions separated by commas or pipes (e.g., "BRAC | Khulna Medical College | Afia Clinic").
-- Education: Degrees, Majors, and Institutes (e.g., "MBBS from Khulna Medical College, HSC from Govt. BL College"). Do NOT return "Not Found" if education or degrees exist in the text.
+- Previous Organizations: List all past companies/institutions separated by pipes (e.g., "Concern Universel | Dhaka Ahsania Mission"). If NO previous company is listed, write "None Listed".
+- Education: Capture ALL academic degrees/qualifications including JSC, SSC, HSC, MBBS, Trade Certifications, Madrasah degrees, or School names. (e.g., "JSC from Char Kanto Nogor Dimoki High School"). Do NOT return "Not Found" if ANY school, madrasah, or exam is present.
 - Experience Summary: Total years or brief breakdown.
 - Keys required: Name, Email, Phone, Designation, Current Organization, Previous Organizations, Experience Summary, Education."""
 
@@ -323,8 +257,6 @@ Rules:
         providers.append(("Gemini", "https://generativelanguage.googleapis.com/v1beta/openai/", st.session_state["gemini_key"], "gemini-2.0-flash"))
     if st.session_state.get("mistral_key"):
         providers.append(("Mistral", "https://api.mistral.ai/v1", st.session_state["mistral_key"], "mistral-tiny"))
-    if st.session_state.get("together_key"):
-        providers.append(("TogetherAI", "https://api.together.xyz/v1", st.session_state["together_key"], "meta-llama/Llama-3-70b-chat-hf"))
 
     if not providers:
         return None, "No API keys configured. Please add an API key in the 'Persistent API Settings' tab."
@@ -387,8 +319,13 @@ with tab_main:
             
             st.dataframe(df, use_container_width=True)
             
+            # --- COPY TO CLIPBOARD CODE ---
+            tsv_data = df.to_csv(sep="\t", index=False)
+            st.subheader("📋 Copy Results directly")
+            st.code(tsv_data, language="text")
+            st.caption("Tip: Click the copy icon in the top right of the text box above to copy data directly into Excel or Google Sheets!")
+
             excel_file = export_formatted_excel(df)
-            
             with open(excel_file, "rb") as f:
                 st.download_button(
                     label="📥 Download Structured Excel File",
@@ -405,6 +342,9 @@ with tab_history:
     if history_data:
         df_hist = pd.DataFrame(history_data)
         st.dataframe(df_hist, use_container_width=True)
+        
+        tsv_hist = df_hist.to_csv(sep="\t", index=False)
+        st.code(tsv_hist, language="text")
         
         if st.button("Clear Saved History"):
             if os.path.exists(HISTORY_FILE):
