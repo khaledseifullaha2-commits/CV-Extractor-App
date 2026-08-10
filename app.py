@@ -30,9 +30,8 @@ def load_history():
 
 def save_history(new_results):
     history = load_history()
-    # Prepend new entries and keep only the last 10 sessions/items
     updated = new_results + history
-    updated = updated[:10]
+    updated = updated[:10]  # Keep last 10
     with open(HISTORY_FILE, "w") as f:
         json.dump(updated, f, indent=2)
 
@@ -44,7 +43,7 @@ def export_formatted_excel(dataframe, filename="Extracted_Candidates.xlsx"):
     wb = openpyxl.load_workbook(filename)
     ws = wb.active
 
-    # Header Style
+    # Header Styling
     header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
     header_font = Font(color="FFFFFF", bold=True, size=11)
     
@@ -54,7 +53,7 @@ def export_formatted_excel(dataframe, filename="Extracted_Candidates.xlsx"):
             cell.font = header_font
             cell.alignment = Alignment(horizontal="center", vertical="center")
 
-    # Column dimensions & text wrapping
+    # Column Widths
     col_widths = {
         'File Name': 20,
         'Name': 22,
@@ -65,7 +64,7 @@ def export_formatted_excel(dataframe, filename="Extracted_Candidates.xlsx"):
         'Previous Organizations': 35,
         'Experience Summary': 30,
         'Education': 35,
-        'Source': 18
+        'Source': 22
     }
 
     for col in ws.columns:
@@ -74,73 +73,108 @@ def export_formatted_excel(dataframe, filename="Extracted_Candidates.xlsx"):
         width = col_widths.get(col_name, 22)
         ws.column_dimensions[col_letter].width = width
 
-        # Apply wrap text to body cells
         for cell in col[1:]:
             cell.alignment = Alignment(wrap_text=True, vertical="top")
 
     wb.save(filename)
     return filename
 
+# ==================== SESSION STATE / PERSISTENT KEYS ====================
+# Initialize API keys in st.session_state so they survive page refreshes
+keys_list = ["openrouter_key", "gemini_key", "groq_key", "mistral_key", "cohere_key", "together_key"]
+for k in keys_list:
+    if k not in st.session_state:
+        st.session_state[k] = ""
+
 # ==================== NAVIGATION TABS ====================
-tab_main, tab_api, tab_history = st.tabs(["🚀 CV Extractor", "⚙️ API & Model Settings", "📜 Local Session History"])
+tab_main, tab_api, tab_history = st.tabs(["🚀 CV Extractor", "⚙️ Persistent API Settings", "📜 Local Session History"])
 
 # ==================== TAB 2: API SETTINGS ====================
 with tab_api:
     st.header("🔑 Multi-Provider API Configuration")
-    st.caption("Keys are stored locally in your current browser session.")
+    st.caption("Keys saved here will stay active in your browser session even if you refresh the page!")
 
     col_a, col_b = st.columns(2)
     
     with col_a:
-        st.subheader("OpenRouter")
+        st.subheader("1. OpenRouter")
         st.markdown("[🔗 Get OpenRouter Key](https://openrouter.ai/keys)")
-        openrouter_key = st.text_input("OpenRouter API Key", type="password", key="openrouter_key")
+        st.session_state["openrouter_key"] = st.text_input(
+            "OpenRouter Key", value=st.session_state["openrouter_key"], type="password", key="input_openrouter"
+        )
 
-        st.subheader("Google Gemini")
-        st.markdown("[🔗 Get Google Gemini Key](https://aistudio.google.com/)")
-        gemini_key = st.text_input("Gemini API Key", type="password", key="gemini_key")
+        st.subheader("2. Google Gemini")
+        st.markdown("[🔗 Get Gemini Key](https://aistudio.google.com/)")
+        st.session_state["gemini_key"] = st.text_input(
+            "Gemini Key", value=st.session_state["gemini_key"], type="password", key="input_gemini"
+        )
+
+        st.subheader("3. Groq AI")
+        st.markdown("[🔗 Get Groq Key](https://console.groq.com/keys)")
+        st.session_state["groq_key"] = st.text_input(
+            "Groq Key", value=st.session_state["groq_key"], type="password", key="input_groq"
+        )
 
     with col_b:
-        st.subheader("Groq (Ultra Fast)")
-        st.markdown("[🔗 Get Groq Key](https://console.groq.com/keys)")
-        groq_key = st.text_input("Groq API Key", type="password", key="groq_key")
-
-        st.subheader("Mistral AI")
+        st.subheader("4. Mistral AI")
         st.markdown("[🔗 Get Mistral Key](https://console.mistral.ai/)")
-        mistral_key = st.text_input("Mistral API Key", type="password", key="mistral_key")
+        st.session_state["mistral_key"] = st.text_input(
+            "Mistral Key", value=st.session_state["mistral_key"], type="password", key="input_mistral"
+        )
+
+        st.subheader("5. Together AI")
+        st.markdown("[🔗 Get Together AI Key](https://api.together.ai/)")
+        st.session_state["together_key"] = st.text_input(
+            "Together AI Key", value=st.session_state["together_key"], type="password", key="input_together"
+        )
+
+        st.subheader("6. Cohere AI")
+        st.markdown("[🔗 Get Cohere Key](https://dashboard.cohere.com/api-keys)")
+        st.session_state["cohere_key"] = st.text_input(
+            "Cohere Key", value=st.session_state["cohere_key"], type="password", key="input_cohere"
+        )
 
     st.markdown("---")
     st.subheader("🧪 Test API Connections")
     
-    if st.button("Test Connected APIs"):
+    if st.button("Test Saved API Keys"):
         results_status = []
         
         # Test OpenRouter
-        if openrouter_key:
+        if st.session_state["openrouter_key"]:
             try:
-                c = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=openrouter_key)
+                c = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=st.session_state["openrouter_key"])
                 c.chat.completions.create(model="openrouter/free", messages=[{"role":"user","content":"hi"}], max_tokens=5)
                 results_status.append("✅ OpenRouter: Connected successfully!")
             except Exception as e:
                 results_status.append(f"❌ OpenRouter Error: {str(e)[:60]}")
 
         # Test Groq
-        if groq_key:
+        if st.session_state["groq_key"]:
             try:
-                c = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=groq_key)
+                c = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=st.session_state["groq_key"])
                 c.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role":"user","content":"hi"}], max_tokens=5)
                 results_status.append("✅ Groq: Connected successfully!")
             except Exception as e:
                 results_status.append(f"❌ Groq Error: {str(e)[:60]}")
 
         # Test Gemini
-        if gemini_key:
+        if st.session_state["gemini_key"]:
             try:
-                c = OpenAI(base_url="https://generativelanguage.googleapis.com/v1beta/openai/", api_key=gemini_key)
+                c = OpenAI(base_url="https://generativelanguage.googleapis.com/v1beta/openai/", api_key=st.session_state["gemini_key"])
                 c.chat.completions.create(model="gemini-2.0-flash", messages=[{"role":"user","content":"hi"}], max_tokens=5)
                 results_status.append("✅ Google Gemini: Connected successfully!")
             except Exception as e:
                 results_status.append(f"❌ Gemini Error: {str(e)[:60]}")
+
+        # Test Mistral
+        if st.session_state["mistral_key"]:
+            try:
+                c = OpenAI(base_url="https://api.mistral.ai/v1", api_key=st.session_state["mistral_key"])
+                c.chat.completions.create(model="mistral-tiny", messages=[{"role":"user","content":"hi"}], max_tokens=5)
+                results_status.append("✅ Mistral AI: Connected successfully!")
+            except Exception as e:
+                results_status.append(f"❌ Mistral Error: {str(e)[:60]}")
 
         if not results_status:
             st.warning("Please enter at least one API key above.")
@@ -213,17 +247,21 @@ Rules:
 
     user_prompt = f"CV TEXT:\n{text[:6000]}"
 
-    # Auto-Select Active API Client
+    # Build active provider pipeline based on saved keys in session_state
     providers = []
-    if openrouter_key:
-        providers.append(("OpenRouter", "https://openrouter.ai/api/v1", openrouter_key, "openrouter/free"))
-    if groq_key:
-        providers.append(("Groq", "https://api.groq.com/openai/v1", groq_key, "llama-3.3-70b-versatile"))
-    if gemini_key:
-        providers.append(("Gemini", "https://generativelanguage.googleapis.com/v1beta/openai/", gemini_key, "gemini-2.0-flash"))
+    if st.session_state.get("openrouter_key"):
+        providers.append(("OpenRouter", "https://openrouter.ai/api/v1", st.session_state["openrouter_key"], "openrouter/free"))
+    if st.session_state.get("groq_key"):
+        providers.append(("Groq", "https://api.groq.com/openai/v1", st.session_state["groq_key"], "llama-3.3-70b-versatile"))
+    if st.session_state.get("gemini_key"):
+        providers.append(("Gemini", "https://generativelanguage.googleapis.com/v1beta/openai/", st.session_state["gemini_key"], "gemini-2.0-flash"))
+    if st.session_state.get("mistral_key"):
+        providers.append(("Mistral", "https://api.mistral.ai/v1", st.session_state["mistral_key"], "mistral-tiny"))
+    if st.session_state.get("together_key"):
+        providers.append(("TogetherAI", "https://api.together.xyz/v1", st.session_state["together_key"], "meta-llama/Llama-3-70b-chat-hf"))
 
     if not providers:
-        return None, "No API key configured in Settings tab."
+        return None, "No API keys configured. Please add an API key in the 'Persistent API Settings' tab."
 
     for provider_name, base_url, key, model in providers:
         try:
@@ -241,14 +279,14 @@ Rules:
             if parsed:
                 parsed["Source"] = f"{provider_name} ({model})"
                 return parsed, None
-        except Exception as e:
+        except Exception:
             continue
 
-    return None, "All active API providers failed."
+    return None, "All configured API providers failed."
 
 # ==================== TAB 1: MAIN EXTRACTOR ====================
 with tab_main:
-    st.write("Upload PDF CVs below to extract formatted candidate data into Excel.")
+    st.write("Upload PDF CVs below to extract candidate data into Excel.")
     uploaded_files = st.file_uploader("Drop CV PDFs here", type=["pdf"], accept_multiple_files=True)
 
     if st.button("🚀 Process CVs", type="primary") and uploaded_files:
