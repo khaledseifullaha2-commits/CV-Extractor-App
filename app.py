@@ -17,6 +17,39 @@ st.set_page_config(
 )
 
 HISTORY_FILE = "session_history.json"
+KEYS_FILE = "saved_api_keys.json"
+
+# ==================== PERSISTENT KEYS MANAGEMENT ====================
+def load_saved_keys():
+    """Load keys from local file if available."""
+    if os.path.exists(KEYS_FILE):
+        try:
+            with open(KEYS_FILE, "r") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+def save_keys_to_file(keys_dict):
+    """Save keys locally so they survive refreshes."""
+    try:
+        with open(KEYS_FILE, "w") as f:
+            json.dump(keys_dict, f, indent=2)
+    except Exception:
+        pass
+
+# Initialize Keys from storage or URL query params
+saved_file_keys = load_saved_keys()
+api_providers = ["openrouter", "gemini", "groq", "mistral", "together", "cohere"]
+
+for provider in api_providers:
+    session_key = f"{provider}_key"
+    # Check URL params first, then saved file, then empty string
+    param_val = st.query_params.get(session_key, "")
+    file_val = saved_file_keys.get(session_key, "")
+    
+    if session_key not in st.session_state:
+        st.session_state[session_key] = param_val or file_val or ""
 
 # ==================== LOCAL HISTORY MANAGEMENT ====================
 def load_history():
@@ -79,59 +112,93 @@ def export_formatted_excel(dataframe, filename="Extracted_Candidates.xlsx"):
     wb.save(filename)
     return filename
 
-# ==================== SESSION STATE / PERSISTENT KEYS ====================
-# Initialize API keys in st.session_state so they survive page refreshes
-keys_list = ["openrouter_key", "gemini_key", "groq_key", "mistral_key", "cohere_key", "together_key"]
-for k in keys_list:
-    if k not in st.session_state:
-        st.session_state[k] = ""
-
 # ==================== NAVIGATION TABS ====================
 tab_main, tab_api, tab_history = st.tabs(["🚀 CV Extractor", "⚙️ Persistent API Settings", "📜 Local Session History"])
 
 # ==================== TAB 2: API SETTINGS ====================
 with tab_api:
     st.header("🔑 Multi-Provider API Configuration")
-    st.caption("Keys saved here will stay active in your browser session even if you refresh the page!")
+    st.caption("Keys entered here are auto-saved locally so you DON'T have to re-enter them on refresh!")
+
+    def update_key(provider_name):
+        """Callback to lock key into session_state, URL params, and local storage."""
+        val = st.session_state[f"input_{provider_name}"]
+        st.session_state[f"{provider_name}_key"] = val
+        st.query_params[f"{provider_name}_key"] = val
+        
+        # Save to local file
+        current_keys = load_saved_keys()
+        current_keys[f"{provider_name}_key"] = val
+        save_keys_to_file(current_keys)
 
     col_a, col_b = st.columns(2)
     
     with col_a:
         st.subheader("1. OpenRouter")
         st.markdown("[🔗 Get OpenRouter Key](https://openrouter.ai/keys)")
-        st.session_state["openrouter_key"] = st.text_input(
-            "OpenRouter Key", value=st.session_state["openrouter_key"], type="password", key="input_openrouter"
+        st.text_input(
+            "OpenRouter Key", 
+            value=st.session_state["openrouter_key"], 
+            type="password", 
+            key="input_openrouter",
+            on_change=update_key,
+            args=("openrouter",)
         )
 
         st.subheader("2. Google Gemini")
         st.markdown("[🔗 Get Gemini Key](https://aistudio.google.com/)")
-        st.session_state["gemini_key"] = st.text_input(
-            "Gemini Key", value=st.session_state["gemini_key"], type="password", key="input_gemini"
+        st.text_input(
+            "Gemini Key", 
+            value=st.session_state["gemini_key"], 
+            type="password", 
+            key="input_gemini",
+            on_change=update_key,
+            args=("gemini",)
         )
 
         st.subheader("3. Groq AI")
         st.markdown("[🔗 Get Groq Key](https://console.groq.com/keys)")
-        st.session_state["groq_key"] = st.text_input(
-            "Groq Key", value=st.session_state["groq_key"], type="password", key="input_groq"
+        st.text_input(
+            "Groq Key", 
+            value=st.session_state["groq_key"], 
+            type="password", 
+            key="input_groq",
+            on_change=update_key,
+            args=("groq",)
         )
 
     with col_b:
         st.subheader("4. Mistral AI")
         st.markdown("[🔗 Get Mistral Key](https://console.mistral.ai/)")
-        st.session_state["mistral_key"] = st.text_input(
-            "Mistral Key", value=st.session_state["mistral_key"], type="password", key="input_mistral"
+        st.text_input(
+            "Mistral Key", 
+            value=st.session_state["mistral_key"], 
+            type="password", 
+            key="input_mistral",
+            on_change=update_key,
+            args=("mistral",)
         )
 
         st.subheader("5. Together AI")
         st.markdown("[🔗 Get Together AI Key](https://api.together.ai/)")
-        st.session_state["together_key"] = st.text_input(
-            "Together AI Key", value=st.session_state["together_key"], type="password", key="input_together"
+        st.text_input(
+            "Together AI Key", 
+            value=st.session_state["together_key"], 
+            type="password", 
+            key="input_together",
+            on_change=update_key,
+            args=("together",)
         )
 
         st.subheader("6. Cohere AI")
         st.markdown("[🔗 Get Cohere Key](https://dashboard.cohere.com/api-keys)")
-        st.session_state["cohere_key"] = st.text_input(
-            "Cohere Key", value=st.session_state["cohere_key"], type="password", key="input_cohere"
+        st.text_input(
+            "Cohere Key", 
+            value=st.session_state["cohere_key"], 
+            type="password", 
+            key="input_cohere",
+            on_change=update_key,
+            args=("cohere",)
         )
 
     st.markdown("---")
@@ -247,7 +314,6 @@ Rules:
 
     user_prompt = f"CV TEXT:\n{text[:6000]}"
 
-    # Build active provider pipeline based on saved keys in session_state
     providers = []
     if st.session_state.get("openrouter_key"):
         providers.append(("OpenRouter", "https://openrouter.ai/api/v1", st.session_state["openrouter_key"], "openrouter/free"))
