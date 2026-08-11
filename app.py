@@ -1,10 +1,15 @@
+import os
+import glob
+import docx
+from doc2docx import convert
+from pypdf import PdfReader
+from docxtpl import DocxTemplate
 import streamlit as st
 import PyPDF2
 import pdfplumber
 import pandas as pd
 import json
 import re
-import os
 import time
 import openpyxl
 from openpyxl.styles import Alignment, Font, PatternFill
@@ -12,13 +17,19 @@ from openai import OpenAI
 
 # ==================== PAGE CONFIG ====================
 st.set_page_config(
-    page_title="Multi-Provider Talent CV Extractor",
+    page_title="Multi-Provider Talent CV & TOR Extractor",
     page_icon="📄",
     layout="wide"
 )
 
 HISTORY_FILE = "session_history.json"
 KEYS_FILE = "saved_api_keys.json"
+INPUT_DIR = "input_tor"
+OUTPUT_DIR = "output_job_posts"
+TEMPLATE_FILE = "template.docx"
+
+os.makedirs(INPUT_DIR, exist_ok=True)
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # ==================== PERSISTENT KEYS MANAGEMENT ====================
 def load_saved_keys():
@@ -105,7 +116,7 @@ def export_formatted_excel(dataframe, filename="Extracted_Candidates.xlsx"):
     wb.save(filename)
     return filename
 
-# ==================== DETERMINISTIC (REGEX) PARSERS ====================
+# ==================== DETERMINISTIC (REGEX) & TOR PARSERS ====================
 def extract_email(text):
     match = re.search(r'[a-zA-Z0-9%+\_.-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', text)
     return match.group(0).strip() if match else "N/A"
@@ -120,14 +131,12 @@ def extract_education_hardcode(text):
     """Parses education keywords directly from text/tables."""
     edu_matches = []
     
-    # Check Bdjobs qualification block or general degree titles
     keywords = ["JSC", "SSC", "HSC", "Dakhil", "Alim", "Fazil", "Kamil", "BSc", "BA", "BCom", "MBBS", "Diploma", "Masters"]
     
     lines = text.split('\n')
-    for i, line in enumerate(lines):
+    for line in lines:
         for kw in keywords:
             if re.search(r'\b' + kw + r'\b', line, re.IGNORECASE):
-                # Pick up surrounding text context
                 segment = line.strip()
                 if len(segment) < 100 and segment not in edu_matches:
                     edu_matches.append(segment)
@@ -136,10 +145,157 @@ def extract_education_hardcode(text):
         return " | ".join(edu_matches[:3])
     return "Not Found"
 
-# ==================== NAVIGATION TABS ====================
-tab_main, tab_api, tab_history = st.tabs(["🚀 CV Extractor", "⚙️ Persistent API Settings", "📜 Local Session History"])
+def preprocess_files():
+    """Automatically converts any legacy .doc files in the folder to .docx format on the fly."""
+    doc_files = glob.glob(os.path.join(INPUT_DIR, "*.doc")) + glob.glob(os.path.join(INPUT_DIR, "*.DOC"))
+    for file_path in doc_files:
+        try:
+            convert(file_path)
+        except Exception:
+            pass
 
-# ==================== TAB 2: API SETTINGS ====================
+def extract_text_from_file(file_path):
+    ext = file_path.lower().split('.')[-1]
+    full_text = ""
+    
+    if ext == "docx":
+        doc = docx.Document(file_path)
+        for p in doc.paragraphs:
+            if p.text.strip():
+                full_text += p.text.strip() + "\n"
+        
+        for table in doc.tables:
+            for row in table.rows:
+                cell_texts = [cell.text.strip().replace('\n', ' ') for cell in row.cells if cell.text.strip()]
+                if cell_texts:
+                    full_text += " | ".join(cell_texts) + "\n"
+                    
+    elif ext == "pdf":
+        reader = PdfReader(file_path)
+        for page in reader.pages:
+            text = page.extract_text()
+            if text:
+                full_text += text + "\n"
+                
+    return full_text
+
+def parse_tor_dynamically(file_path):
+    filename = os.path.basename(file_path)
+    raw_text = extract_text_from_file(file_path)
+
+    lines = [line.strip() for line in raw_text.split('\n') if line.strip()]
+    
+    clean_title = filename.rsplit(".", 1)[0].replace("_", " ")
+    for line in lines:
+        if "Position title" in line or "Position:" in line:
+            parts = line.split("|")
+            if len(parts) > 1:
+                clean_title = parts[-1].strip()
+                break
+
+    responsibilities = []
+    education = []
+    experience = []
+    languages = []
+    
+    current_section = None
+    for line in lines:
+        lower_line = line.lower()
+        
+        if "responsibilities and accountabilities" in lower_line or "iii. responsibilities" in lower_line or "job responsibility" in lower_line:
+            current_section = "resp"
+            continue
+        elif "education and experience" in lower_line or "v. education and experience" in lower_line or "iv. required qualifications" in lower_line or "educational requirements" in lower_line:
+            current_section = "edu_block"
+            continue
+        elif "experience requirements" in lower_line:
+            current_section = "exp"
+            continue
+        elif "languages" in lower_line or "vi. languages" in lower_line or "v. languages" in lower_line:
+            current_section = "lang"
+            continue
+        elif "vi. competencies" in lower_line or "notes" in lower_line or "iv. competencies" in lower_line or "apply procedure" in lower_line:
+            current_section = None
+            
+        cleaned_line = line
+        for tag in ["<td colspan=3/>", "<td colspan=2/>", "<td colspan=1/>", "<td/>"]:
+            cleaned_line = cleaned_line.replace(tag, "")
+        
+        sub_parts = [p.strip(" |•-") for p in cleaned_line.split("|") if p.strip(" |•-")]
+        
+        for part in sub_parts:
+            if not part or len(part) < 3:
+                continue
+            if part.lower() in ["education", "experience", "required", "advantageous", "either:", "or", "educational requirements", "experience requirements"]:
+                continue
+
+            if current_section == "resp":
+                if part not in responsibilities:
+                    responsibilities.append(part)
+            elif current_section == "edu_block":
+                if "year" in part.lower() or "diploma" in part.lower() or "degree" in part.lower() or "bachelor" in part.lower():
+                    if part not in education:
+                        education.append(part)
+                else:
+                    if part not in experience:
+                        experience.append(part)
+            elif current_section == "exp":
+                if part not in experience:
+                    experience.append(part)
+            elif current_section == "lang":
+                if part not in languages:
+                    languages.append(part)
+
+    responsibilities = list(dict.fromkeys(responsibilities))
+    education = list(dict.fromkeys(education))
+    experience = list(dict.fromkeys(experience))
+    languages = list(dict.fromkeys(languages))
+
+    if not responsibilities:
+        responsibilities = ["Carry out regular field visits and monitor project activities."]
+    if not education:
+        education = ["Bachelor’s degree in relevant field or equivalent technical certification/diploma."]
+    if not experience:
+        experience = ["Relevant professional experience in project implementation and field operations."]
+    if not languages:
+        languages = ["Fluency in English and Bengali is required."]
+
+    competencies = {
+        "values_heading": "Values - all staff members must abide by and demonstrate these core values:",
+        "values_list": [
+            "Inclusion and respect for diversity: respects and promotes individual and cultural differences.",
+            "Integrity and transparency: maintains high ethical standards and acts consistent with organizational principles.",
+            "Professionalism: demonstrates ability to work in a composed, competent, and committed manner."
+        ],
+        "core_heading": "Core Competencies – behavioural indicators",
+        "core_list": [
+            "Teamwork: develops and promotes effective collaboration within and across units to achieve shared goals.",
+            "Delivering results: produces and delivers quality results in a service-oriented and timely manner.",
+            "Managing and sharing knowledge: continuously seeks to learn, share knowledge and innovate.",
+            "Accountability: takes ownership for achieving priorities and assumes responsibility for own actions.",
+            "Communication: encourages clear and open communication and explains complex matters clearly."
+        ],
+        "managerial_heading": "Managerial Competencies – behavioural indicators",
+        "managerial_list": [
+            "Leadership: provides a clear sense of direction and leads by example.",
+            "Empowering others and building trust: creates an enabling environment where staff can contribute their best.",
+            "Strategic thinking and vision: works strategically to realize organizational goals."
+        ]
+    }
+
+    return {
+        "job_title": clean_title,
+        "responsibilities": responsibilities[:12],
+        "education": education[:5],
+        "experience": experience[:8],
+        "competencies": competencies,
+        "languages": languages[:4]
+    }
+
+# ==================== NAVIGATION TABS ====================
+tab_main, tab_tor, tab_api, tab_history = st.tabs(["🚀 CV Extractor", "📋 TOR Job Post Generator", "⚙️ Persistent API Settings", "📜 Local Session History"])
+
+# ==================== TAB 3: API SETTINGS ====================
 with tab_api:
     st.header("🔑 Multi-Provider API Configuration")
     st.caption("Keys entered here are auto-saved locally so you DON'T have to re-enter them on refresh!")
@@ -270,7 +426,6 @@ def clean_and_parse_json(text):
     return None
 
 def run_ai_extraction(text):
-    # Sanitize and strip heavy bullet points
     lines = [line for line in text.split('\n') if not line.strip().startswith('•')]
     compressed_text = "\n".join(lines)[:3500]
 
@@ -318,7 +473,7 @@ Return JSON ONLY."""
                 parsed["Source"] = f"{provider_name} ({model})"
                 return parsed, None
         except Exception:
-            time.sleep(1) # Brief retry pause for rate limits
+            time.sleep(1)
             continue
 
     return None, "All API providers timed out or hit rate limits."
@@ -339,28 +494,23 @@ with tab_main:
                 st.error(f"Could not read {file.name}")
                 continue
             
-            # 1. Deterministic Python Extractions (100% Reliable)
             email_val = extract_email(raw_text)
             phone_val = extract_phone(raw_text)
             fallback_edu = extract_education_hardcode(raw_text)
 
-            # 2. AI Structured Extraction
             data, err = run_ai_extraction(raw_text)
             
             if data:
-                # Override AI fields with regex verified data
                 data["File Name"] = file.name
                 data["Email"] = email_val
                 data["Phone"] = phone_val if data.get("Phone") in ["N/A", "", None] else data.get("Phone")
                 
-                # Check education safety
                 if not data.get("Education") or data.get("Education") in ["Not Found", "None Listed", ""]:
                     data["Education"] = fallback_edu
 
                 results.append(data)
                 st.success(f"Successfully processed {file.name}")
             else:
-                # If AI fails completely, fallback to regex-only entry
                 st.warning(f"AI failed for {file.name}, using Regex Fallback.")
                 results.append({
                     "File Name": file.name,
@@ -400,7 +550,84 @@ with tab_main:
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
 
-# ==================== TAB 3: LOCAL HISTORY ====================
+# ==================== TAB 2: TOR JOB POST GENERATOR ====================
+with tab_tor:
+    st.header("📋 TOR to Job Post Document Generator")
+    st.markdown("Upload Terms of Reference (TOR) files in `.docx`, `.doc`, or `.pdf` format to automatically convert and structure them into polished job circulars using `template.docx`.")
+
+    if not os.path.exists(TEMPLATE_FILE):
+        st.error(f"⚠️ Missing required template file: `{TEMPLATE_FILE}`. Please place it in the application root directory.")
+    
+    uploaded_tors = st.file_uploader("Upload TOR Files", type=["docx", "doc", "pdf"], accept_multiple_files=True, key="tor_uploader")
+
+    if st.button("⚙️ Generate Job Posts", type="primary") and uploaded_tors:
+        # Save uploaded files into INPUT_DIR
+        for uploaded_file in uploaded_tors:
+            temp_path = os.path.join(INPUT_DIR, uploaded_file.name)
+            with open(temp_path, "wb") as f:
+                f.write(uploaded_file.getbuffer())
+
+        preprocess_files()
+
+        tor_files = []
+        for ext in ("*.docx", "*.DOCX", "*.pdf", "*.PDF"):
+            tor_files.extend(glob.glob(os.path.join(INPUT_DIR, ext)))
+        
+        if not tor_files:
+            st.warning(f"⚠️ No supported TOR files found in the '{INPUT_DIR}' folder!")
+        else:
+            progress_bar = st.progress(0)
+            success_count = 0
+
+            for idx, file_path in enumerate(tor_files):
+                filename = os.path.basename(file_path)
+                try:
+                    template = DocxTemplate(TEMPLATE_FILE)
+                    data = parse_tor_dynamically(file_path)
+
+                    context = {
+                        "job_title": data["job_title"],
+                        "location": "Cox's Bazar",
+                        "employment_status": "Contractual",
+                        "deadline": "August 30, 2026",
+                        "salary": "As per company policy",
+                        
+                        "responsibilities": data["responsibilities"],
+                        "education": data["education"],
+                        "experience": data["experience"],
+                        "competencies": data["competencies"],
+                        "languages": data["languages"]
+                    }
+                    
+                    template.render(context)
+                    
+                    output_name = filename.rsplit(".", 1)[0] + ".docx"
+                    output_path = os.path.join(OUTPUT_DIR, f"Generated_{output_name}")
+                    template.save(output_path)
+                    success_count += 1
+                    st.success(f"✅ Generated: Generated_{output_name}")
+                except Exception as e:
+                    st.error(f"❌ Error processing {filename}: {e}")
+                
+                progress_bar.progress((idx + 1) / len(tor_files))
+
+            if success_count > 0:
+                st.balloons()
+                st.info("All generated files are saved in the `output_job_posts` directory.")
+                
+                # Provide direct download buttons for generated files
+                generated_results = glob.glob(os.path.join(OUTPUT_DIR, "*.docx"))
+                for gen_file in generated_results:
+                    with open(gen_file, "rb") as f:
+                        st.download_button(
+                            label=f"📥 Download {os.path.basename(gen_file)}",
+                            data=f.read(),
+                            file_name=os.path.basename(gen_file),
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            key=gen_file
+                        )
+
+# ==================== TAB 4: LOCAL HISTORY ====================
 with tab_history:
     st.header("📜 Session History (Last 20 Extractions)")
     history_data = load_history()
